@@ -11,8 +11,8 @@ use pnet::packet::udp::UdpPacket;
 
 use std::net::{IpAddr,Ipv4Addr};
 
-const INTERFACE_L: &str = "vboxnet0";
-const INTERFACE_R: &str = "wlp0s20f3";
+const INTERFACE_L: &str = "enp0s3";
+const INTERFACE_R: &str = "vboxnet0";
 
 const SMA_HM2_MULTICAST_IP: Ipv4Addr = Ipv4Addr::new(239,12,255,254);
 
@@ -43,7 +43,7 @@ fn forward_igmp_packet(interface_name:&str,total_packet_len:usize,ethernet_packe
 	let mut ethernet_out_buffer:Vec<u8> = vec![0;total_packet_len];
     let mut ethernet_out_packet = MutableEthernetPacket::new(&mut ethernet_out_buffer).unwrap();
 
-	let interface_name_match = |iface: &NetworkInterface| iface.name == INTERFACE_R;
+	let interface_name_match = |iface: &NetworkInterface| iface.name == interface_name;
 	
 	let nic = datalink::interfaces().into_iter().find(interface_name_match)
 		                .unwrap_or_else(||panic!("No matching right interface"));
@@ -76,8 +76,7 @@ fn forward_igmp_packet(interface_name:&str,total_packet_len:usize,ethernet_packe
 		ethernet_out_packet.set_payload(Ipv4_packet.packet_mut());
 
 		sender.send_to(ethernet_out_packet.packet(), None).unwrap().unwrap();
-		println!("Igmpv3 packet is forwarded!");
-
+		println!("IGMPv3 packet is forwarded: {:#?}",ethernet_out_packet);
 
 }
 
@@ -86,86 +85,17 @@ fn forward_igmp_packet(interface_name:&str,total_packet_len:usize,ethernet_packe
 fn handle_igmp_packet(interface_name: &str, source: IpAddr, destination: IpAddr, packet: &[u8], ethernet: &EthernetPacket){
 
 	let  total_packet_len:usize=ethernet.packet().len(); //it should be 60
-	let mut ethernet_out_buffer:Vec<u8> = vec![0;total_packet_len];
-    let mut ethernet_out_packet = MutableEthernetPacket::new(&mut ethernet_out_buffer).unwrap();
-
-
-	const IPV4_MCAST_16:MacAddr=MacAddr(0x01,0x0,0x5e,0x0,0x0,0x16);
-	
 	
 	if interface_name == INTERFACE_L{
 	
-	let interface_name_match = |iface: &NetworkInterface| iface.name == INTERFACE_R;
-	
-	let nic = datalink::interfaces().into_iter().find(interface_name_match)
-		                .unwrap_or_else(||panic!("No matching right interface"));
-	
-	let (mut sender, _) = match pnet::datalink::channel(&nic, Default::default()) {
-        Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
-        Ok(_) => panic!("Unknown channel type"),
-        Err(e) => panic!("Error happened {}", e),
-    };
-
-	
-	let source_ip = nic
-					.ips
-					.iter()
-					.find(|ip| ip.is_ipv4())
-					.map(|ip| match ip.ip() {
-						IpAddr::V4(ip) => ip,
-						_ => unreachable!(),
-					})
-					.unwrap();
-		ethernet_out_packet.set_destination(IPV4_MCAST_16);		
-		ethernet_out_packet.set_source(nic.mac.unwrap());
-		ethernet_out_packet.set_ethertype(EtherTypes::Ipv4);
-		
-		let mut Ipv4_buffer:Vec<u8> = Vec::from(ethernet.payload()); 
-		let mut Ipv4_packet: MutableIpv4Packet<'_>=MutableIpv4Packet::new(&mut Ipv4_buffer).unwrap();
-		
-		Ipv4_packet.set_source(source_ip);
-
-		ethernet_out_packet.set_payload(Ipv4_packet.packet_mut());
-
-		println!("Left interface outcoming data is ready!");
-		sender.send_to(ethernet_out_packet.packet(), None).unwrap().unwrap();
+		forward_igmp_packet(INTERFACE_R,total_packet_len,ethernet);
+		println!("Left interface igmpv3 data is forwarded!");
 			
 	}
 	else if interface_name == INTERFACE_R {
-		let interface_name_match = |iface: &NetworkInterface| iface.name == INTERFACE_L;
-	
-		let nic = datalink::interfaces().into_iter().find(interface_name_match)
-		                .unwrap_or_else(||panic!("No matching right interface"));
-	
-	let (mut sender, _) = match pnet::datalink::channel(&nic, Default::default()) {
-        Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
-        Ok(_) => panic!("Unknown channel type"),
-        Err(e) => panic!("Error happened {}", e),
-    };
-
-	
-	let source_ip = nic
-					.ips
-					.iter()
-					.find(|ip| ip.is_ipv4())
-					.map(|ip| match ip.ip() {
-						IpAddr::V4(ip) => ip,
-						_ => unreachable!(),
-					})
-					.unwrap();
-		ethernet_out_packet.set_destination(IPV4_MCAST_16);		
-		ethernet_out_packet.set_source(nic.mac.unwrap());
-		ethernet_out_packet.set_ethertype(EtherTypes::Ipv4);
 		
-		let mut Ipv4_buffer:Vec<u8> = Vec::from(ethernet.payload()); 
-		let mut Ipv4_packet: MutableIpv4Packet<'_>=MutableIpv4Packet::new(&mut Ipv4_buffer).unwrap();
-		
-		Ipv4_packet.set_source(source_ip);
-
-		ethernet_out_packet.set_payload(Ipv4_packet.packet_mut());
-
-		println!("Right interface outcoming data is ready!");
-		sender.send_to(ethernet_out_packet.packet(), None).unwrap().unwrap();
+		forward_igmp_packet(INTERFACE_L,total_packet_len,ethernet);
+		println!("Right interface igmpv3 data is forwarded!");
 			
 
 	}
@@ -183,7 +113,6 @@ fn handle_igmp_packet(interface_name: &str, source: IpAddr, destination: IpAddr,
 	);
 	
 	
-	println!("IGMPv3 packet is forwarded: {:#?}",ethernet_out_packet);
 
 }
 
@@ -282,11 +211,11 @@ fn main() {
 			Err(e) => panic!("error receiving packet: {}", e),
 		}
 
-		/*match rx_right.next() {
+		match rx_right.next() {
 			Ok(packet) => {
 				handle_ethernet_frame(&interface_right, &EthernetPacket::new(packet).unwrap());
 			}
 			Err(e) => panic!("error receiving packet: {}", e),
-		}*/
+		}
 	}
 }
